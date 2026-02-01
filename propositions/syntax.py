@@ -59,9 +59,7 @@ def is_binary(string: str) -> bool:
     Returns:
         ``True`` if the given string is a binary operator, ``False`` otherwise.
     """
-    return string == '&' or string == '|' or string == '->'
-    # For Chapter 3:
-    # return string in {'&', '|',  '->', '+', '<->', '-&', '-|'}
+    return string in {'&', '|', '->', '+', '<->', '-&', '-|'}
 
 @frozen
 class Formula:
@@ -72,9 +70,9 @@ class Formula:
         root (`str`): the constant, variable name, or operator at the root of
             the formula tree.
         first (`~typing.Optional`\\[`Formula`]): the first operand of the root,
-            if the root is a unary or binary operator.
+        if the root is a unary or binary operator.
         second (`~typing.Optional`\\[`Formula`]): the second operand of the
-            root, if the root is a binary operator.
+        root, if the root is a binary operator.
     """
     root: str
     first: Optional[Formula]
@@ -110,6 +108,12 @@ class Formula:
             The standard string representation of the current formula.
         """
         # Task 1.1
+        if is_variable(self.root) or is_constant(self.root):
+            return self.root
+        if is_unary(self.root):
+            return f'~{repr(self.first)}'
+        return f'({repr(self.first)}{self.root}{repr(self.second)})'
+
 
     def __eq__(self, other: object) -> bool:
         """Compares the current formula with the given one.
@@ -146,6 +150,14 @@ class Formula:
             A set of all variable names used in the current formula.
         """
         # Task 1.2
+        if is_variable(self.root):
+            return {self.root}
+        if is_constant(self.root):
+            return set()
+        if is_unary(self.root):
+            return self.first.variables()
+        return self.first.variables() | self.second.variables()
+        
 
     @memoized_parameterless_method
     def operators(self) -> Set[str]:
@@ -156,6 +168,17 @@ class Formula:
             current formula.
         """
         # Task 1.3
+        if is_variable(self.root):
+            return set()
+        if is_constant(self.root):
+            return {self.root}
+        ops = {self.root}
+        if is_unary(self.root):
+            ops |= self.first.operators()
+        else:
+            ops |= self.first.operators()
+            ops |= self.second.operators()
+        return ops
         
     @staticmethod
     def _parse_prefix(string: str) -> Tuple[Union[Formula, None], str]:
@@ -175,6 +198,45 @@ class Formula:
             is a string with some human-readable content.
         """
         # Task 1.4
+        if not string:
+            return None, 'no string'
+
+        first_char = string[0]
+
+        if is_variable(first_char):
+            i = 1
+            while i < len(string) and string[i].isdigit():
+                i += 1
+            return Formula(string[:i]), string[i:]
+
+        if is_constant(first_char):
+            return Formula(first_char), string[1:]
+
+        if is_unary(first_char):
+            subformula, remainder = Formula._parse_prefix(string[1:])
+            if subformula is None:
+                return None, remainder
+            return Formula(first_char, subformula), remainder
+
+        if first_char == '(':
+            left_formula, after_left = Formula._parse_prefix(string[1:])
+            if left_formula is None:
+                return None, after_left
+
+            for operator in ['<->', '->', '-&', '-|', '+', '&', '|']:
+                if after_left.startswith(operator):
+                    right_formula, after_right = \
+                        Formula._parse_prefix(after_left[len(operator):])
+                    if right_formula is None:
+                        return None, after_right
+                    if after_right.startswith(')'):
+                        return Formula(operator, left_formula, right_formula), \
+                               after_right[1:]
+                    return None, after_right
+
+            return None, after_left
+
+        return None, 'invalid formula'
 
     @staticmethod
     def is_formula(string: str) -> bool:
@@ -188,6 +250,8 @@ class Formula:
             representation of a formula, ``False`` otherwise.
         """
         # Task 1.5
+        parsed, rest = Formula._parse_prefix(string)
+        return parsed is not None and rest == ''
         
     @staticmethod
     def parse(string: str) -> Formula:
@@ -201,6 +265,9 @@ class Formula:
         """
         assert Formula.is_formula(string)
         # Task 1.6
+        parsed, rest = Formula._parse_prefix(string)
+        assert parsed is not None and rest == ''
+        return parsed
 
     def polish(self) -> str:
         """Computes the polish notation representation of the current formula.
@@ -208,7 +275,11 @@ class Formula:
         Returns:
             The polish notation representation of the current formula.
         """
-        # Optional Task 1.7
+        if is_variable(self.root) or is_constant(self.root):
+            return self.root
+        if is_unary(self.root):
+            return self.root + self.first.polish()
+        return self.root + self.first.polish() + self.second.polish()
 
     @staticmethod
     def parse_polish(string: str) -> Formula:
@@ -220,7 +291,37 @@ class Formula:
         Returns:
             A formula whose polish notation representation is the given string.
         """
-        # Optional Task 1.8
+        def parse_from(idx: int) -> Tuple[Optional[Formula], int]:
+            if idx >= len(string):
+                return None, idx
+
+            for op in ['<->', '->', '-&', '-|', '+', '&', '|']:
+                if string.startswith(op, idx):
+                    first, i1 = parse_from(idx + len(op))
+                    if first is None:
+                        return None, i1
+                    second, i2 = parse_from(i1)
+                    if second is None:
+                        return None, i2
+                    return Formula(op, first, second), i2
+
+            if string[idx] == '~':
+                operand, i1 = parse_from(idx + 1)
+                if operand is None:
+                    return None, i1
+                return Formula('~', operand), i1
+
+            ch = string[idx]
+            if is_constant(ch) or is_variable(ch):
+                i = idx + 1
+                while i < len(string) and string[i].isdigit():
+                    i += 1
+                return Formula(string[idx:i]), i
+            return None, idx
+
+        parsed, end = parse_from(0)
+        assert parsed is not None and end == len(string)
+        return parsed
 
     def substitute_variables(self, substitution_map: Mapping[str, Formula]) -> \
             Formula:
@@ -246,6 +347,16 @@ class Formula:
         for variable in substitution_map:
             assert is_variable(variable)
         # Task 3.3
+        if is_variable(self.root):
+            return substitution_map.get(self.root, self)
+        if is_constant(self.root):
+            return self
+        if is_unary(self.root):
+            return Formula(self.root,
+                           self.first.substitute_variables(substitution_map))
+        return Formula(self.root,
+                       self.first.substitute_variables(substitution_map),
+                       self.second.substitute_variables(substitution_map))
 
     def substitute_operators(self, substitution_map: Mapping[str, Formula]) -> \
             Formula:
@@ -276,3 +387,39 @@ class Formula:
                    is_binary(operator)
             assert substitution_map[operator].variables().issubset({'p', 'q'})
         # Task 3.4
+        def apply_template(template: Formula,
+                           first: Optional[Formula],
+                           second: Optional[Formula]) -> Formula:
+            if is_variable(template.root):
+                if template.root == 'p' and first is not None:
+                    return first
+                if template.root == 'q' and second is not None:
+                    return second
+                return template
+            if is_constant(template.root):
+                return template
+            if is_unary(template.root):
+                return Formula(template.root,
+                               apply_template(template.first, first, second))
+            return Formula(template.root,
+                           apply_template(template.first, first, second),
+                           apply_template(template.second, first, second))
+
+        if is_variable(self.root):
+            return self
+        if is_constant(self.root):
+            if self.root in substitution_map:
+                return apply_template(substitution_map[self.root], None, None)
+            return self
+        if is_unary(self.root):
+            replaced = self.first.substitute_operators(substitution_map)
+            if self.root in substitution_map:
+                return apply_template(substitution_map[self.root],
+                                      replaced, None)
+            return Formula(self.root, replaced)
+
+        left = self.first.substitute_operators(substitution_map)
+        right = self.second.substitute_operators(substitution_map)
+        if self.root in substitution_map:
+            return apply_template(substitution_map[self.root], left, right)
+        return Formula(self.root, left, right)
